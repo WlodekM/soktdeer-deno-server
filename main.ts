@@ -335,6 +335,7 @@ Deno.serve({
                     socket.send(util.error("malformedJson", listener))
                     return;
                 }
+                //TODO: move into separate files
                 const commands: Record<string, () => Promise<void>> = {
                     'register': async () => {
                         const fieldCheck = util.fieldCheck({
@@ -428,7 +429,41 @@ Deno.serve({
                             return socket.send(util.error(valid, listener, await acc.get_ban(r.username)))
                         else
                             return socket.send(util.error(valid, listener))
-                    }
+                    },
+                    'login_token': async () => {
+                        const fieldCheck = util.fieldCheck({"token": {"range": [32,128], "types": ['string']}}, r)
+                        if (fieldCheck != true)
+                            return socket.send(util.error(fieldCheck, listener))
+                        if (client_data[String(id)])
+                            return socket.send(util.error("authed", listener))
+                        if (locked)
+                            return socket.send(util.error("lockdown", listener))
+                        const valid = await acc.verify(r["token"])
+                        if (typeof valid != 'string'){
+                            if (valid.banned)
+                                return socket.send(util.error("banned", listener, acc.get_ban(valid["username"])))
+                            const userdata = util.authorize(valid["username"], String(id), socket, undefined, valid["bot"])
+                            socket.send(JSON.stringify({"error": false, "user": userdata, "listener": listener}))
+                            return util.ulist()
+                        }
+                        return socket.send(util.error(valid, listener))
+                    },
+                    'get_user': async () => {
+                        const fieldCheck = util.fieldCheck({"username": {"range": [1,21], "types": ['string']}}, r)
+                        if (fieldCheck != true)
+                            return socket.send(util.error(fieldCheck, listener))
+                        if (!client_data[String(id)])
+                            return socket.send(util.error("unauthorized", listener))
+                        const valid = await acc.verify(r["token"])
+                        if (typeof valid != 'string'){
+                            if (valid.banned)
+                                return socket.send(util.error("banned", listener, acc.get_ban(valid["username"])))
+                            const userdata = util.authorize(valid["username"], String(id), socket, undefined, valid["bot"])
+                            socket.send(JSON.stringify({"error": false, "user": userdata, "listener": listener}))
+                            return util.ulist()
+                        }
+                        return socket.send(util.error(valid, listener))
+                    },
                 }
                 if (!commands[r.command])
                     return socket.send(util.error("malformedJson", listener))
