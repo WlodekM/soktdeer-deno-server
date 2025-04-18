@@ -28,7 +28,7 @@
 import mongo from "npm:mongodb";
 import dotenv from "npm:dotenv";
 import { scryptSync, randomBytes } from "node:crypto";
-import uuid from "npm:uuid";
+import * as uuid from "npm:uuid";
 
 dotenv.config()
 
