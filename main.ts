@@ -205,6 +205,30 @@ const util = {
             }
         }
         return true
+    },
+    ulist() {
+        for (const id in connecitons) {
+            connecitons[id].send(JSON.stringify({
+                command: "ulist",
+                ulist: ulist
+            }))
+        }
+    },
+    async authorize(username: string, conn_id: string, socket: WebSocket, client: string | undefined, bot: boolean) {
+        // (todo from helium)
+        // TODO: statuses
+        if (client)
+            if (!client.match || !client.match(/^[a-zA-Z0-9-_. ]{1,50}$/))
+                client = "";
+        ulist[username] = {"client": client, "status": "", "bot": bot}
+        client_data[conn_id] = {"username": username, "client": client, "websocket": socket, "connected": Date.now(), "bot": bot}
+        //TODO: ips
+        // if ips_by_client[websocket]:
+        //     db.acc.add_ip(ips_by_client[websocket], username)
+        const data = await acc.getUser(username)
+        if (data != 'notExists')
+            delete data.secure
+        return data
     }
 }
 
@@ -223,7 +247,7 @@ const errorContexts: Record<string, string> = {
     "ratelimited": "You are ratelimited."
 }
 
-const ulist = {}
+const ulist: Record<string, any> = {}
 const client_data: Record<string, any> = {}
 
 const ratelimits: Record<string, number> = {}
@@ -262,14 +286,17 @@ if (await acc.getUser("deleted") == "notExists") {
 
 let idThing = 0;
 
+const connecitons: Record<string, WebSocket> = {}
+
 Deno.serve({
-    //TODO: move to .env
     port: +(Deno.env.get('PORT') as string),
     handler: async (request) => {
         if (request.headers.get("upgrade") === "websocket") {
             const { socket, response } = Deno.upgradeWebSocket(request);
 
             const id = idThing++;
+
+            connecitons[String(id)] = socket;
 
             socket.onopen = () => {
                 console.log("CONNECTED");
@@ -366,8 +393,8 @@ Deno.serve({
                     },
                     'login_pswd': async () => {
                         const fieldCheck = util.fieldCheck({
-                            username: {"range": [1,21], "types": ['string']},
-                            password: {"range": [8,256], "types": ['string']}
+                            username: {range: [1,21], types: ['string']},
+                            password: {range: [8,256], types: ['string']}
                         }, r)
                         if (fieldCheck != true)
                             return socket.send(util.error(fieldCheck, listener))
@@ -381,14 +408,24 @@ Deno.serve({
                                 return socket.send(util.error("lockdown", listener))
                         }
                         r.username = r.username.toLowerCase();
-                        const valid = acc.verifyPswd(r.username, r.password)
+                        const valid = await acc.verifyPswd(r.username, r.password)
                         if (typeof valid != 'string') {
-                            userdata = util.authorize(r["username"], str(websocket.id), websocket, r.get("client"), valid["bot"])
-                            await websocket.send(json.dumps({"error": False, "token": valid["token"], "user": userdata, "listener": listener}))
+                            const userdata = await util.authorize(
+                                r.username,
+                                String(id),
+                                socket,
+                                undefined,
+                                valid.bot)
+                            socket.send(JSON.stringify({
+                                error: false,
+                                token: valid.token,
+                                user: userdata,
+                                listener
+                            }))
                             util.ulist()
                             return;
                         } else if ( valid == "banned")
-                            return socket.send(util.error(valid, listener, db.acc.get_ban(r["username"])))
+                            return socket.send(util.error(valid, listener, await acc.get_ban(r.username)))
                         else
                             return socket.send(util.error(valid, listener))
                     }
@@ -396,8 +433,8 @@ Deno.serve({
                 if (!commands[r.command])
                     return socket.send(util.error("malformedJson", listener))
             };
-            socket.onclose = () => console.log("DISCONNECTED");
-            socket.onerror = (error) => console.error("ERROR:", error);
+            socket.onclose = () => delete connecitons[String(id)]
+            socket.onerror = () => delete connecitons[String(id)]
 
             return response;
         } else {
