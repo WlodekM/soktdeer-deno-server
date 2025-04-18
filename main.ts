@@ -27,11 +27,13 @@
 
 import mongo from "npm:mongodb";
 import dotenv from "npm:dotenv";
-import { scryptSync } from "node:crypto";
+import { scryptSync, randomBytes } from "node:crypto";
+import uuid from "npm:uuid";
 
 dotenv.config()
 
 const mongoUrl = Deno.env.get('MONGO_URL')
+const salt = Deno.env.get('SALT') as string;
 
 if (!Deno.env.has('MONGO_URL') ||
     !mongoUrl ||
@@ -79,7 +81,7 @@ const acc = {
         }
     },
 
-    async addUser(data: any, username: string) {
+    async addUser(data: any, username: string = '') {
         const user = await usersColl.findOne({ "username": username })
         if (user)
             return "exists";
@@ -140,7 +142,7 @@ const acc = {
         const user = await usersColl.findOne({ "username": username })
         if (!user)
             return "notExists"
-        if (scryptSync(password, Deno.env.get('SALT') as string, 128) != user.secure.password)
+        if (scryptSync(password, salt, 128) != user.secure.password)
             return "unauthorized"
         else if (user["banned_until"] > Math.round(Date.now()))
             return "banned"
@@ -221,7 +223,7 @@ const errorContexts: Record<string, string> = {
 }
 
 const ulist = {}
-const client_data = {}
+const client_data: Record<string, any> = {}
 
 const ratelimits: Record<string, number> = {}
 
@@ -312,10 +314,54 @@ Deno.serve({
                             password: {range: [8,256], types: ['string']},
                             invite_code: {range: [0, 199], types: ['string', 'undefined']}
                         }, r)
-                        if (fieldCheck != true) {
-                            socket.send(util.error(fieldCheck, listener))
-                            return;
+                        if (fieldCheck != true)
+                            return socket.send(util.error(fieldCheck, listener))
+                        if (client_data[String(id)])
+                            return socket.send(util.error("authed", listener));
+                        if (locked)
+                            return socket.send(util.error("lockdown", listener));
+                        r.username = r.username.toLowerCase();
+                        if (!r.username.match(/^[a-z0-9-_.]{1,20}$/))
+                            return socket.send(util.error("invalidUsername", listener))
+                        if (await acc.getUser(r.username) != "notExists")
+                            return socket.send(util.error("usernameTaken", listener));
+                        //TODO: ip stuff
+                        // ips = []
+                        // if ips_by_client[websocket]:
+                        //     ips.append(ips_by_client[websocket])
+                        const data = {
+                            "_id": uuid.v4(),
+                            "username": r.username,
+                            "display_name": r.username,
+                            "created": Date.now(),
+                            "avatar": undefined,
+                            "bot": false,
+                            "banned_until": 0,
+                            "permissions": [],
+                            "profile": {
+                                "bio": "",
+                                "lastfm": "",
+                                "banner": undefined,
+                                "links": {}
+                            },
+                            "secure": {
+                                "password": scryptSync(r["password"], salt, 128),
+                                "token": randomBytes(64).toString('base64url'),
+                                "ban_reason": "",
+                                "invite_code": r.invite_code ?? '',
+                                "support_code": randomBytes(16).toString('base64url'),
+                                "ips": [] //ips
+                            }
                         }
+                        const result = await acc.addUser(data)
+                        if (result != true)
+                            return socket.send(util.error(result, listener));
+                        // invite_codes.remove(r["invite_code"])
+                        socket.send(JSON.stringify({
+                            error: false,
+                            token: data.secure.token,
+                            listener
+                        }))
                     }
                 }
                 if (!commands[r.command])
