@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-explicit-any
 /**
  * some part of this code were taken from soktdeer helium
  * 
@@ -263,7 +264,7 @@ let idThing = 0;
 
 Deno.serve({
     //TODO: move to .env
-    port: 3636,
+    port: +(Deno.env.get('PORT') as string),
     handler: async (request) => {
         if (request.headers.get("upgrade") === "websocket") {
             const { socket, response } = Deno.upgradeWebSocket(request);
@@ -362,6 +363,34 @@ Deno.serve({
                             token: data.secure.token,
                             listener
                         }))
+                    },
+                    'login_pswd': async () => {
+                        const fieldCheck = util.fieldCheck({
+                            username: {"range": [1,21], "types": ['string']},
+                            password: {"range": [8,256], "types": ['string']}
+                        }, r)
+                        if (fieldCheck != true)
+                            return socket.send(util.error(fieldCheck, listener))
+                        if (client_data[String(id)])
+                            return socket.send(util.error("authed", listener));
+                        if (locked) {
+                            const perms = await acc.get_perms(r.username)
+                            if (!Array.isArray(perms))
+                                return socket.send(util.error("lockdown", listener))
+                            if (perms.includes('LOCK'))
+                                return socket.send(util.error("lockdown", listener))
+                        }
+                        r.username = r.username.toLowerCase();
+                        const valid = acc.verifyPswd(r.username, r.password)
+                        if (typeof valid != 'string') {
+                            userdata = util.authorize(r["username"], str(websocket.id), websocket, r.get("client"), valid["bot"])
+                            await websocket.send(json.dumps({"error": False, "token": valid["token"], "user": userdata, "listener": listener}))
+                            util.ulist()
+                            return;
+                        } else if ( valid == "banned")
+                            return socket.send(util.error(valid, listener, db.acc.get_ban(r["username"])))
+                        else
+                            return socket.send(util.error(valid, listener))
                     }
                 }
                 if (!commands[r.command])
