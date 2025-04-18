@@ -432,6 +432,7 @@ Deno.serve({
                 }
                 if (!commands[r.command])
                     return socket.send(util.error("malformedJson", listener))
+                await commands[r.command]()
             };
             socket.onclose = () => delete connecitons[String(id)]
             socket.onerror = () => delete connecitons[String(id)]
