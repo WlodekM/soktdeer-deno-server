@@ -1,3 +1,30 @@
+/**
+ * some part of this code were taken from soktdeer helium
+ * 
+ * The license for soktdeer helium:
+ * MIT License
+ * 
+ * Copyright (c) 2024-2025 Cole W.
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 import mongo from "npm:mongodb";
 import dotenv from "npm:dotenv";
 import { scryptSync } from "node:crypto";
@@ -138,7 +165,7 @@ const acc = {
 //!SECTION
 
 const util = {
-    error(code:string, listener:string, data:any={}) {
+    error(code:string, listener:string | undefined, data:any={}) {
         let context: string;
         if (errorContexts[code])
             context = errorContexts[code]
@@ -196,7 +223,7 @@ const errorContexts: Record<string, string> = {
 const ulist = {}
 const client_data = {}
 
-const ratelimits = {}
+const ratelimits: Record<string, number> = {}
 
 const clients = []
 const ips_by_client = {}
@@ -230,6 +257,8 @@ if (await acc.getUser("deleted") == "notExists") {
     }, 'deleted')
 }
 
+let idThing = 0;
+
 Deno.serve({
     //TODO: move to .env
     port: 3636,
@@ -237,12 +266,60 @@ Deno.serve({
         if (request.headers.get("upgrade") === "websocket") {
             const { socket, response } = Deno.upgradeWebSocket(request);
 
+            const id = idThing++;
+
             socket.onopen = () => {
                 console.log("CONNECTED");
             };
             socket.onmessage = async (event) => {
-                console.log(`RECEIVED: ${event.data}`);
-                socket.send("pong");
+                if (typeof event.data != 'string')
+                    return;
+                const message = String(event.data)
+                console.log(ratelimits[String(id)])
+                console.log(Date.now())
+                console.log(Date.now() > ratelimits[String(id)])
+                if (ratelimits[String(id)] > Date.now()) {
+                    let lst = undefined
+                    try {
+                        const r = JSON.parse(message)
+                        if (!r.listener)
+                            r.listener = undefined
+                        lst = r.listener
+                    // deno-lint-ignore no-empty
+                    } catch (_e) {}
+                    socket.send(util.error("ratelimited", lst))
+                    return;
+                }
+                ratelimits[String(id)] = Date.now() + 0.25;
+                let r;
+                try {
+                    r = JSON.parse(message)
+                } catch (_e) {
+                    socket.send(util.error("malformedJson", undefined))
+                    return;
+                }
+                if (!r.listener)
+                    r.listener = undefined;
+                const listener = r.listener
+                if (!r.command){
+                    socket.send(util.error("malformedJson", listener))
+                    return;
+                }
+                const commands: Record<string, () => Promise<void>> = {
+                    'register': async () => {
+                        const fieldCheck = util.fieldCheck({
+                            username: {range: [1,21], types: ['string']},
+                            password: {range: [8,256], types: ['string']},
+                            invite_code: {range: [0, 199], types: ['string', 'undefined']}
+                        }, r)
+                        if (fieldCheck != true) {
+                            socket.send(util.error(fieldCheck, listener))
+                            return;
+                        }
+                    }
+                }
+                if (!commands[r.command])
+                    return socket.send(util.error("malformedJson", listener))
             };
             socket.onclose = () => console.log("DISCONNECTED");
             socket.onerror = (error) => console.error("ERROR:", error);
