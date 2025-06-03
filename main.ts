@@ -60,6 +60,8 @@ const inboxColl = await getColl('inbox')
 
 console.info('uh ya')
 
+//TODO - user and post interfaces
+
 //SECTION - DB
 const acc = {
     async getUser(username: string) {
@@ -164,11 +166,103 @@ const acc = {
             return "notExists"
         return user["permissions"]
     },
+
+    async add(data) {
+        try{
+            await postsColl.insertOne(data)
+        } catch (_e) {
+            return "fail"
+        }
+        return true
+    },
+}
+const posts = {
+    async get_recent(amount=75) {
+        const posts = await postsColl.find().sort("created", -1).limit(amount).toArray()
+        for (const i of posts) {
+            let data: any = acc.getUser(i.author)
+            if (typeof(data) != 'object')
+                data = {}
+            else {
+                delete data.secure
+                delete data.profile
+            }
+            i.author = data
+            let incr = -1
+            for (const j of i.replies) {
+                incr += 1
+                data = acc.getUser(j.author)
+                if (typeof data != 'object')
+                    data = {}
+                else {
+                    delete data.secure
+                    delete data.profile
+                }
+                i.replies[incr].author = data
+            }
+        }
+        return posts
+    },
+    async get_page(offset=0) {
+        const posts = await postsColl.find().sort("created", -1).skip(offset).limit(75 + offset).toArray()
+        for (const i of posts) {
+            let data: any = await acc.getUser(i.author)
+            if (typeof(data) != 'object')
+                data = {}
+            else {
+                delete data.secure
+                delete data.profile
+            }
+            i.author = data
+            let incr = -1
+            for (const j of i.replies) {
+                incr += 1
+                data = acc.getUser(j.author)
+                if (typeof data != 'object')
+                    data = {}
+                else {
+                    delete data.secure
+                    delete data.profile
+                }
+                i.replies[incr].author = data
+            }
+        }
+        return posts
+    },
+    async get_by_id(post_id: string, supply_author=false) {
+        //@ts-ignore:
+        const post = await postsColl.findOne({"_id": post_id})
+        if (!post)
+            return "notExists"
+        if (supply_author) {
+            let data: any = await acc.getUser(post.author)
+            if (typeof data != 'object')
+                data = {}
+            else {
+                delete data.secure
+                delete data.profile
+            }
+            post.author = data
+            let incr = -1
+            for (const j of post.replies) {
+                incr += 1;
+                data = await acc.getUser(j.author);
+                if (typeof data != 'object')
+                    data = {}
+                else {
+                    delete data.secure
+                    delete data.profile
+                }
+                post.replies[incr].author = data
+            }
+        }
+        return post
+    },
 }
 //!SECTION
 
 const util = {
-    error(code:string, listener:string | undefined, data:any={}) {
+    error(code: string, listener: string | undefined, data: any = {}) {
         let context: string;
         if (errorContexts[code])
             context = errorContexts[code]
@@ -184,23 +278,23 @@ const util = {
         }
         return JSON.stringify(response)
     },
-    fieldCheck(expects: Record<string, {range: [number, number], types: string[]}>, gets: Record<string, any>) {
-        for (const i in expects){
+    fieldCheck(expects: Record<string, { range: [number, number], types: string[] }>, gets: Record<string, any>) {
+        for (const i in expects) {
             if (!gets[i])
                 return "malformedJson"
-            if (typeof(gets[i]) == 'string' || Array.isArray(gets[i])){
+            if (typeof (gets[i]) == 'string' || Array.isArray(gets[i])) {
                 let yes = false;
-                if (!expects[i].types.includes(typeof(gets[i]))
+                if (!expects[i].types.includes(typeof (gets[i]))
                     && expects[i].types.includes('array')
                     && Array.isArray(gets[i]))
                     yes = true;
-                console.log(gets[i].length,expects[i].range)
+                console.log(gets[i].length, expects[i].range)
                 if ((gets[i].length &&
                     (
                         gets[i].length > expects[i].range[1] ||
                         gets[i].length < expects[i].range[0]
                     )) ||
-                    (!expects[i].types.includes(typeof(gets[i])) && !yes))
+                    (!expects[i].types.includes(typeof (gets[i])) && !yes))
                     return "lengthInvalid"
             }
         }
@@ -220,8 +314,8 @@ const util = {
         if (client)
             if (!client.match || !client.match(/^[a-zA-Z0-9-_. ]{1,50}$/))
                 client = "";
-        ulist[username] = {"client": client, "status": "", "bot": bot}
-        client_data[conn_id] = {"username": username, "client": client, "websocket": socket, "connected": Date.now(), "bot": bot}
+        ulist[username] = { "client": client, "status": "", "bot": bot }
+        client_data[conn_id] = { "username": username, "client": client, "websocket": socket, "connected": Date.now(), "bot": bot }
         //TODO: ips
         // if ips_by_client[websocket]:
         //     db.acc.add_ip(ips_by_client[websocket], username)
@@ -291,193 +385,205 @@ const connecitons: Record<string, WebSocket> = {}
 Deno.serve({
     port: +(Deno.env.get('PORT') as string),
     handler: async (request) => {
-        if (request.headers.get("upgrade") === "websocket") {
-            const { socket, response } = Deno.upgradeWebSocket(request);
-
-            const id = idThing++;
-
-            connecitons[String(id)] = socket;
-
-            socket.onopen = () => {
-                console.log("CONNECTED");
-            };
-            socket.onmessage = async (event) => {
-                if (typeof event.data != 'string')
-                    return;
-                const message = String(event.data)
-                console.log(ratelimits[String(id)])
-                console.log(Date.now())
-                console.log(Date.now() > ratelimits[String(id)])
-                if (ratelimits[String(id)] > Date.now()) {
-                    let lst = undefined
-                    try {
-                        const r = JSON.parse(message)
-                        if (!r.listener)
-                            r.listener = undefined
-                        lst = r.listener
-                    // deno-lint-ignore no-empty
-                    } catch (_e) {}
-                    socket.send(util.error("ratelimited", lst))
-                    return;
-                }
-                ratelimits[String(id)] = Date.now() + 0.25;
-                let r;
-                try {
-                    r = JSON.parse(message)
-                } catch (_e) {
-                    socket.send(util.error("malformedJson", undefined))
-                    return;
-                }
-                if (!r.listener)
-                    r.listener = undefined;
-                const listener = r.listener
-                if (!r.command){
-                    socket.send(util.error("malformedJson", listener))
-                    return;
-                }
-                //TODO: move into separate files
-                const commands: Record<string, () => Promise<void>> = {
-                    'register': async () => {
-                        const fieldCheck = util.fieldCheck({
-                            username: {range: [1,21], types: ['string']},
-                            password: {range: [8,256], types: ['string']},
-                            invite_code: {range: [0, 199], types: ['string', 'undefined']}
-                        }, r)
-                        if (fieldCheck != true)
-                            return socket.send(util.error(fieldCheck, listener))
-                        if (client_data[String(id)])
-                            return socket.send(util.error("authed", listener));
-                        if (locked)
-                            return socket.send(util.error("lockdown", listener));
-                        r.username = r.username.toLowerCase();
-                        if (!r.username.match(/^[a-z0-9-_.]{1,20}$/))
-                            return socket.send(util.error("invalidUsername", listener))
-                        if (await acc.getUser(r.username) != "notExists")
-                            return socket.send(util.error("usernameTaken", listener));
-                        //TODO: ip stuff
-                        // ips = []
-                        // if ips_by_client[websocket]:
-                        //     ips.append(ips_by_client[websocket])
-                        const data = {
-                            "_id": uuid.v4(),
-                            "username": r.username,
-                            "display_name": r.username,
-                            "created": Date.now(),
-                            "avatar": undefined,
-                            "bot": false,
-                            "banned_until": 0,
-                            "permissions": [],
-                            "profile": {
-                                "bio": "",
-                                "lastfm": "",
-                                "banner": undefined,
-                                "links": {}
-                            },
-                            "secure": {
-                                "password": scryptSync(r["password"], salt, 128),
-                                "token": randomBytes(64).toString('base64url'),
-                                "ban_reason": "",
-                                "invite_code": r.invite_code ?? '',
-                                "support_code": randomBytes(16).toString('base64url'),
-                                "ips": [] //ips
-                            }
-                        }
-                        const result = await acc.addUser(data)
-                        if (result != true)
-                            return socket.send(util.error(result, listener));
-                        // invite_codes.remove(r["invite_code"])
-                        socket.send(JSON.stringify({
-                            error: false,
-                            token: data.secure.token,
-                            listener
-                        }))
-                    },
-                    'login_pswd': async () => {
-                        const fieldCheck = util.fieldCheck({
-                            username: {range: [1,21], types: ['string']},
-                            password: {range: [8,256], types: ['string']}
-                        }, r)
-                        if (fieldCheck != true)
-                            return socket.send(util.error(fieldCheck, listener))
-                        if (client_data[String(id)])
-                            return socket.send(util.error("authed", listener));
-                        if (locked) {
-                            const perms = await acc.get_perms(r.username)
-                            if (!Array.isArray(perms))
-                                return socket.send(util.error("lockdown", listener))
-                            if (perms.includes('LOCK'))
-                                return socket.send(util.error("lockdown", listener))
-                        }
-                        r.username = r.username.toLowerCase();
-                        const valid = await acc.verifyPswd(r.username, r.password)
-                        if (typeof valid != 'string') {
-                            const userdata = await util.authorize(
-                                r.username,
-                                String(id),
-                                socket,
-                                undefined,
-                                valid.bot)
-                            socket.send(JSON.stringify({
-                                error: false,
-                                token: valid.token,
-                                user: userdata,
-                                listener
-                            }))
-                            util.ulist()
-                            return;
-                        } else if ( valid == "banned")
-                            return socket.send(util.error(valid, listener, await acc.get_ban(r.username)))
-                        else
-                            return socket.send(util.error(valid, listener))
-                    },
-                    'login_token': async () => {
-                        const fieldCheck = util.fieldCheck({"token": {"range": [32,128], "types": ['string']}}, r)
-                        if (fieldCheck != true)
-                            return socket.send(util.error(fieldCheck, listener))
-                        if (client_data[String(id)])
-                            return socket.send(util.error("authed", listener))
-                        if (locked)
-                            return socket.send(util.error("lockdown", listener))
-                        const valid = await acc.verify(r["token"])
-                        if (typeof valid != 'string'){
-                            if (valid.banned)
-                                return socket.send(util.error("banned", listener, acc.get_ban(valid["username"])))
-                            const userdata = util.authorize(valid["username"], String(id), socket, undefined, valid["bot"])
-                            socket.send(JSON.stringify({"error": false, "user": userdata, "listener": listener}))
-                            return util.ulist()
-                        }
-                        return socket.send(util.error(valid, listener))
-                    },
-                    'get_user': async () => {
-                        const fieldCheck = util.fieldCheck({"username": {"range": [1,21], "types": ['string']}}, r)
-                        if (fieldCheck != true)
-                            return socket.send(util.error(fieldCheck, listener))
-                        if (!client_data[String(id)])
-                            return socket.send(util.error("unauthorized", listener))
-                        const valid = await acc.verify(r["token"])
-                        if (typeof valid != 'string'){
-                            if (valid.banned)
-                                return socket.send(util.error("banned", listener, acc.get_ban(valid["username"])))
-                            const userdata = util.authorize(valid["username"], String(id), socket, undefined, valid["bot"])
-                            socket.send(JSON.stringify({"error": false, "user": userdata, "listener": listener}))
-                            return util.ulist()
-                        }
-                        return socket.send(util.error(valid, listener))
-                    },
-                }
-                if (!commands[r.command])
-                    return socket.send(util.error("malformedJson", listener))
-                await commands[r.command]()
-            };
-            socket.onclose = () => delete connecitons[String(id)]
-            socket.onerror = () => delete connecitons[String(id)]
-
-            return response;
-        } else {
+        if (request.headers.get("upgrade") !== "websocket") {
             // If the request is a normal HTTP request,
             // we serve the client HTML file.
             const file = await Deno.open("./index.html", { read: true });
             return new Response(file.readable);
         }
+        const { socket, response } = Deno.upgradeWebSocket(request);
+
+        const id = idThing++;
+
+        connecitons[String(id)] = socket;
+
+        socket.onopen = () => {
+            console.log("CONNECTED");
+        };
+        socket.onmessage = async (event) => {
+            if (typeof event.data != 'string')
+                return;
+            const message = String(event.data)
+            console.log(ratelimits[String(id)])
+            console.log(Date.now())
+            console.log(Date.now() > ratelimits[String(id)])
+            if (ratelimits[String(id)] > Date.now()) {
+                let lst = undefined
+                try {
+                    const r = JSON.parse(message)
+                    if (!r.listener)
+                        r.listener = undefined
+                    lst = r.listener
+                    // deno-lint-ignore no-empty
+                } catch (_e) { }
+                socket.send(util.error("ratelimited", lst))
+                return;
+            }
+            ratelimits[String(id)] = Date.now() + 0.25;
+            let r;
+            try {
+                r = JSON.parse(message)
+            } catch (_e) {
+                socket.send(util.error("malformedJson", undefined))
+                return;
+            }
+            if (!r.listener)
+                r.listener = undefined;
+            const listener = r.listener
+            if (!r.command) {
+                socket.send(util.error("malformedJson", listener))
+                return;
+            }
+            //TODO: move into separate files
+            const commands: Record<string, () => Promise<void>> = {
+                'register': async () => {
+                    const fieldCheck = util.fieldCheck({
+                        username: { range: [1, 21], types: ['string'] },
+                        password: { range: [8, 256], types: ['string'] },
+                        invite_code: { range: [0, 199], types: ['string', 'undefined'] }
+                    }, r)
+                    if (fieldCheck != true)
+                        return socket.send(util.error(fieldCheck, listener))
+                    if (client_data[String(id)])
+                        return socket.send(util.error("authed", listener));
+                    if (locked)
+                        return socket.send(util.error("lockdown", listener));
+                    r.username = r.username.toLowerCase();
+                    if (!r.username.match(/^[a-z0-9-_.]{1,20}$/))
+                        return socket.send(util.error("invalidUsername", listener))
+                    if (await acc.getUser(r.username) != "notExists")
+                        return socket.send(util.error("usernameTaken", listener));
+                    //TODO: ip stuff
+                    // ips = []
+                    // if ips_by_client[websocket]:
+                    //     ips.append(ips_by_client[websocket])
+                    const data = {
+                        "_id": uuid.v4(),
+                        "username": r.username,
+                        "display_name": r.username,
+                        "created": Date.now(),
+                        "avatar": undefined,
+                        "bot": false,
+                        "banned_until": 0,
+                        "permissions": [],
+                        "profile": {
+                            "bio": "",
+                            "lastfm": "",
+                            "banner": undefined,
+                            "links": {}
+                        },
+                        "secure": {
+                            "password": scryptSync(r["password"], salt, 128),
+                            "token": randomBytes(64).toString('base64url'),
+                            "ban_reason": "",
+                            "invite_code": r.invite_code ?? '',
+                            "support_code": randomBytes(16).toString('base64url'),
+                            "ips": [] //ips
+                        }
+                    }
+                    const result = await acc.addUser(data)
+                    if (result != true)
+                        return socket.send(util.error(result, listener));
+                    // invite_codes.remove(r["invite_code"])
+                    socket.send(JSON.stringify({
+                        error: false,
+                        token: data.secure.token,
+                        listener
+                    }))
+                },
+                'login_pswd': async () => {
+                    const fieldCheck = util.fieldCheck({
+                        username: { range: [1, 21], types: ['string'] },
+                        password: { range: [8, 256], types: ['string'] }
+                    }, r)
+                    if (fieldCheck != true)
+                        return socket.send(util.error(fieldCheck, listener))
+                    if (client_data[String(id)])
+                        return socket.send(util.error("authed", listener));
+                    if (locked) {
+                        const perms = await acc.get_perms(r.username)
+                        if (!Array.isArray(perms))
+                            return socket.send(util.error("lockdown", listener))
+                        if (perms.includes('LOCK'))
+                            return socket.send(util.error("lockdown", listener))
+                    }
+                    r.username = r.username.toLowerCase();
+                    const valid = await acc.verifyPswd(r.username, r.password)
+                    if (typeof valid != 'string') {
+                        const userdata = await util.authorize(
+                            r.username,
+                            String(id),
+                            socket,
+                            undefined,
+                            valid.bot)
+                        socket.send(JSON.stringify({
+                            error: false,
+                            token: valid.token,
+                            user: userdata,
+                            listener
+                        }))
+                        util.ulist()
+                        return;
+                    } else if (valid == "banned")
+                        return socket.send(util.error(valid, listener, await acc.get_ban(r.username)))
+                    else
+                        return socket.send(util.error(valid, listener))
+                },
+                'login_token': async () => {
+                    const fieldCheck = util.fieldCheck({ "token": { "range": [32, 128], "types": ['string'] } }, r)
+                    if (fieldCheck != true)
+                        return socket.send(util.error(fieldCheck, listener))
+                    if (client_data[String(id)])
+                        return socket.send(util.error("authed", listener))
+                    if (locked)
+                        return socket.send(util.error("lockdown", listener))
+                    const valid = await acc.verify(r["token"])
+                    if (typeof valid != 'string') {
+                        if (valid.banned)
+                            return socket.send(util.error("banned", listener, acc.get_ban(valid["username"])))
+                        const userdata = util.authorize(valid["username"], String(id), socket, undefined, valid["bot"])
+                        socket.send(JSON.stringify({ "error": false, "user": userdata, "listener": listener }))
+                        return util.ulist()
+                    }
+                    return socket.send(util.error(valid, listener))
+                },
+                'get_user': async () => {
+                    const fieldCheck = util.fieldCheck({ "username": { "range": [1, 21], "types": ['string'] } }, r)
+                    if (fieldCheck != true)
+                        return socket.send(util.error(fieldCheck, listener))
+                    if (!client_data[String(id)])
+                        return socket.send(util.error("unauthorized", listener))
+                    const valid = await acc.verify(r["token"])
+                    if (typeof valid != 'string') {
+                        if (valid.banned)
+                            return socket.send(util.error("banned", listener, acc.get_ban(valid["username"])))
+                        const userdata = util.authorize(valid["username"], String(id), socket, undefined, valid["bot"])
+                        socket.send(JSON.stringify({ "error": false, "user": userdata, "listener": listener }))
+                        return util.ulist()
+                    }
+                    return socket.send(util.error(valid, listener))
+                },
+                'get_post': async () => {
+                    const fieldCheck = util.fieldCheck({
+                        id: {range: [8,128], types: ['string']}
+                    }, r)
+                    if (fieldCheck != true)
+                        return socket.send(util.error(fieldCheck, listener))
+                    if (!client_data[String(id)])
+                        return socket.send(util.error("unauthorized", listener))
+                    const data = await posts.get_by_id(r.id, true)
+                    if (typeof data == 'string')
+                        return socket.send(util.error(data, listener))
+                    return socket.send(JSON.stringify({error: false, post: data, listener: listener}))
+                },
+            }
+            if (!commands[r.command])
+                return socket.send(util.error("malformedJson", listener))
+            await commands[r.command]()
+        };
+        socket.onclose = () => delete connecitons[String(id)]
+        socket.onerror = () => delete connecitons[String(id)]
+
+        return response;
     },
 });
