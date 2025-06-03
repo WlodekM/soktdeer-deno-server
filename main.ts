@@ -33,6 +33,9 @@ import * as uuid from "npm:uuid";
 
 dotenv.config()
 
+//FIXME - load from config
+const attachment_whitelist: string[] = []
+
 const mongoUrl = Deno.env.get('MONGO_URL')
 const salt = Deno.env.get('SALT') as string;
 
@@ -166,15 +169,6 @@ const acc = {
             return "notExists"
         return user["permissions"]
     },
-
-    async add(data) {
-        try{
-            await postsColl.insertOne(data)
-        } catch (_e) {
-            return "fail"
-        }
-        return true
-    },
 }
 const posts = {
     async get_recent(amount=75) {
@@ -257,6 +251,16 @@ const posts = {
             }
         }
         return post
+    },
+
+    //TODO - types
+    async add(data: any) {
+        try{
+            await postsColl.insertOne(data)
+        } catch (_e) {
+            return "fail"
+        }
+        return true
     },
 }
 //!SECTION
@@ -346,7 +350,7 @@ const client_data: Record<string, any> = {}
 
 const ratelimits: Record<string, number> = {}
 
-const clients = []
+const clients: WebSocket[] = []
 const ips_by_client = {}
 
 // const invite_codes = []
@@ -382,6 +386,12 @@ let idThing = 0;
 
 const connecitons: Record<string, WebSocket> = {}
 
+function broadcast(sockets: WebSocket[], data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    for (const socket of sockets) {
+        socket.send(data)
+    }
+}
+
 Deno.serve({
     port: +(Deno.env.get('PORT') as string),
     handler: async (request) => {
@@ -396,6 +406,8 @@ Deno.serve({
         const id = idThing++;
 
         connecitons[String(id)] = socket;
+
+        clients.push(socket)
 
         socket.onopen = () => {
             console.log("CONNECTED");
@@ -576,13 +588,131 @@ Deno.serve({
                         return socket.send(util.error(data, listener))
                     return socket.send(JSON.stringify({error: false, post: data, listener: listener}))
                 },
+                'get_posts': async () => {
+                    const fieldCheck = util.fieldCheck({offset: {types: ['number'], range: [-Infinity, Infinity]}}, r)
+                    if (fieldCheck != true)
+                        return await socket.send(util.error(fieldCheck, listener))
+                    if (!client_data.includes(String(id)))
+                        return socket.send(util.error("unauthorized", listener))
+                    const data = await posts.get_page(r["offset"])
+                    if (typeof data == 'string')
+                        return await socket.send(util.error(data, listener))
+                    return await socket.send(JSON.stringify({"error": false, "posts": data, "listener": listener}))
+                },
+                /*TODO: set_property, gen_invite, reset_invites, force_kick, ban, lock (finish)
+                 * banish_to_the_SHADOW_REALM, get_ips, get_inbox, post_inbox
+                 */
+                'post': async () => {
+                    const fieldCheck = util.fieldCheck({
+                        content: {range: [1,3000], types: ['string']},
+                        replies: {range: [0,6], types: ['array']},
+                        attachments: {range: [0,6], types: ['array']}
+                    }, r)
+                    if (fieldCheck != true)
+                        return await socket.send(util.error(fieldCheck, listener))
+                    if (!client_data.includes(id))
+                        return await socket.send(util.error("unauthorized", listener))
+                    //TODO - lc
+                    // if "chat" in r and r["chat"] == "livechat":
+                    //     attachments = []
+                    //     for i in r["attachments"]:
+                    //         if urlparse(i).hostname in attachment_whitelist:
+                    //             attachments.append(i)
+                    //     if len(r["content"]) == 0 and len(r["attachments"]) == 0:
+                    //         await websocket.send(util.error("lengthInvalid", listener))
+                    //         continue
+                    //     username = client_data[str(websocket.id)]["username"]
+                    //     author = util.author_data(username)
+                    //     replies = []
+                    //     for i in r["replies"]:
+                    //         post = db.posts.get_by_id(i)
+                    //         if type(post) == dict and i not in replies:
+                    //             replies.append(post)
+                    //     data = {
+                    //         "_id": str(uuid.uuid4()),
+                    //         "created": time.time(),
+                    //         "content": r["content"],
+                    //         "replies": replies,
+                    //         "attachments": attachments,
+                    //         "author": username
+                    //     }
+                    //     # posted = db.posts.add(data)
+                    //     # if posted != True:
+                    //     #     await websocket.send(util.error(fc, listener))
+                    //     #     continue
+                    //     data["author"] = author
+                    //     data["origin"] = "livechat"
+                    //     incr = -1
+                    //     for j in data["replies"]:
+                    //         incr += 1
+                    //         reply_author = db.acc.get_author(j["author"])
+                    //         if type(reply_author) != dict:
+                    //             reply_author = {}
+                    //         data["replies"][incr]["author"] = reply_author
+                    //     broadcast(clients, json.dumps({
+                    //         "command": "new_post",
+                    //         "origin": "livechat",
+                    //         "data": data
+                    //     }))
+                    //     await websocket.send(json.dumps({"error": False, "listener": listener}))
+                    //     continue
+                    const attachments = []
+                    for (const i of r["attachments"]) {
+                        try {
+                            if (attachment_whitelist.includes(new URL(i).hostname))
+                                attachments.push(i)
+                        } catch (_) {}
+                    }
+                    if (r.content.length == 0 && r.attachments.length == 0)
+                        return await socket.send(util.error("lengthInvalid", listener));
+                    let username = client_data[String(id)].username
+                    let author = util.author_data(username)
+                    //TODO - types
+                    let replies: any[] = []
+                    for (const i of r["replies"]) {
+                        const post = posts.get_by_id(i)
+                        if (typeof post != 'string' && !replies.includes(i))
+                            replies.push(post)
+                    }
+                    let data = {
+                        "_id": String(uuid.v4()),
+                        "created": Date.now() / 1000,
+                        "content": r.content,
+                        "replies": replies,
+                        "attachments": attachments,
+                        "author": username
+                    }
+                    const posted = await posts.add(data)
+                    if (posted != true)
+                        return socket.send(util.error(posted, listener))
+                    data.author = author
+                    let incr = -1
+                    for (const j of data["replies"]) {
+                        incr += 1
+                        let reply_author = await acc.get_author(j["author"])
+                        if (typeof reply_author != 'object')
+                            reply_author = {}
+                        data["replies"][incr]["author"] = reply_author
+                    }
+                    broadcast(clients, JSON.stringify({
+                        "command": "new_post",
+                        "data": data
+                    }))
+                    return await socket.send(JSON.stringify({"error": false, "listener": listener}))
+                }
             }
             if (!commands[r.command])
                 return socket.send(util.error("malformedJson", listener))
             await commands[r.command]()
         };
-        socket.onclose = () => delete connecitons[String(id)]
-        socket.onerror = () => delete connecitons[String(id)]
+        socket.onclose = () => {
+            clients.splice(clients.indexOf(socket));
+            delete connecitons[String(id)];
+        }
+        socket.onerror = () => {
+            clients.splice(clients.indexOf(socket));
+            delete connecitons[String(id)];
+        }
 
         return response;
     },
