@@ -68,28 +68,41 @@ interface UserData extends FullUser {
     },
 }
 
-interface BasePostData {
-    _id: string,
-    created: number,
+
+/** the data sent by the user */
+interface SentPostData {
     content: string,
     attachments: string[],
 }
 
+/** base post data */
+interface BasePostData extends SentPostData {
+    _id: string,
+    created: number,
+}
+
+/** the post data in the db */
 interface PostData extends BasePostData {
     author: string,
     replies: PostData[],
 }
 
+interface ReplyPost extends BasePostData {
+    author: User | {}, // is only {} when something fucks up horribly
+    replies: PostData[],
+}
 interface Post extends BasePostData {
     author: User | {}, // is only {} when something fucks up horribly
-    replies: Post[],
+    replies: ReplyPost[],
 }
 
 interface UserStatus {
     banned: boolean,
     username: string,
-    bot: string
+    bot: boolean
 }
+
+type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>
 
 //FIXME - load from config
 const attachment_whitelist: string[] = []
@@ -231,7 +244,7 @@ class Acc {
     }
 }
 const acc = new Acc()
-const posts = {
+class Posts {
     async get_recent(amount=75): Promise<Post[]> {
         const posts: PostData[] = await postsColl.find<PostData>({}).sort("created", -1).limit(amount).toArray()
         const newPosts: Post[] = await Promise.all(posts
@@ -249,26 +262,29 @@ const posts = {
                 const newPost: Post = {
                     ...post,
                     author: data,
-                }
-                let incr = -1
-                for (const j of post.replies) {
-                    incr += 1
-                    const user = await acc.getUser(j.author)
-                    let data: User | {};
-                    if (typeof(user) != 'object')
-                        data = {}
-                    else {
-                        const userData = user as User & Partial<UserData>;
-                        delete userData.secure
-                        delete userData.profile;
-                        data = userData;
-                    }
-                    newPost.replies[incr].author = data
+                    replies: await Promise.all(post.replies
+                        .map<Promise<PostData>>(async (j, incr) => {
+                            const user = await acc.getUser(j.author)
+                            let data: User | {};
+                            if (typeof(user) != 'object')
+                                data = {}
+                            else {
+                                const userData = user as User & Partial<UserData>;
+                                delete userData.secure
+                                delete userData.profile;
+                                data = userData;
+                            }
+                            return {
+                                ...j,
+                                author: data
+                            } as PostData
+                        })
+                    )
                 }
                 return newPost as Post
             }));
         return newPosts;
-    },
+    }
     async get_page(offset=0): Promise<Post[]> {
         const posts = await postsColl.find<PostData>({}).sort("created", -1).skip(offset).limit(75 + offset).toArray()
         const newPosts: Post[] = await Promise.all(posts
@@ -305,10 +321,12 @@ const posts = {
                 return newPost as Post
             }));
         return newPosts;
-    },
-    async get_by_id(post_id: string, supply_author=false) {
+    }
+    async get_by_id(post_id: string, supply_author:true): Promise<string | Post>
+    async get_by_id(post_id: string, supply_author:false): Promise<string | PostData>
+    async get_by_id(post_id: string, supply_author=false): Promise<string | Post | PostData> {
         //@ts-ignore: 
-        const post = await postsColl.findOne<PostData>({"_id": post_id})
+        const post: PostData = await postsColl.findOne<PostData>({"_id": post_id})
         if (!post)
             return "notExists"
         if (supply_author) {
@@ -334,18 +352,18 @@ const posts = {
             }
         }
         return post
-    },
+    }
 
-    //TODO - types
-    async add(data: any) {
+    async add(data: Omit<PostData, '_id'>) {
         try{
             await postsColl.insertOne(data)
         } catch (_e) {
             return "fail"
         }
         return true
-    },
-}
+    }
+};
+const posts = new Posts();
 //!SECTION
 
 const util = {
@@ -395,7 +413,7 @@ const util = {
             }))
         }
     },
-    async authorize(username: string, conn_id: string, socket: WebSocket, client: string | undefined, bot: boolean) {
+    async authorize(username: string, conn_id: string, socket: WebSocket, client: string | undefined, bot: boolean): Promise<User | string> {
         // (todo from helium)
         // TODO: statuses
         if (client)
@@ -406,10 +424,10 @@ const util = {
         //TODO: ips
         // if ips_by_client[websocket]:
         //     db.acc.add_ip(ips_by_client[websocket], username)
-        const data = await acc.getUser(username)
-        if (data != 'notExists')
+        const data: (User & Partial<UserData>) | string = await acc.getUser(username)
+        if (typeof data != 'string')
             delete data.secure
-        return data
+        return data as User | string
     }
 }
 
