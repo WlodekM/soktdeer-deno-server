@@ -33,6 +33,64 @@ import * as uuid from "npm:uuid";
 
 dotenv.config()
 
+/** the base user interface */
+interface User {
+    _id: string,
+    username: string,
+    display_name: string,
+    created: number,
+    avatar: null | string,
+    bot: boolean,
+    banned_until: number,
+    permissions: string[],
+    verified?: boolean,
+    deleted?: boolean
+}
+
+/** the full user, what is sent to you when you get_user */
+interface FullUser extends User {
+    profile: {
+        bio: string,
+        lastfm: string,
+        banner: null | string,
+        links: {}
+    },
+}
+
+/** the actual data stored in the db, make sure to delete secure before sending anywhere */
+interface UserData extends FullUser {
+    secure: {
+        password: string,
+        token: string,
+        ban_reason: string,
+        invite_code: string,
+        support_code: string,
+    },
+}
+
+interface BasePostData {
+    _id: string,
+    created: number,
+    content: string,
+    attachments: string[],
+}
+
+interface PostData extends BasePostData {
+    author: string,
+    replies: PostData[],
+}
+
+interface Post extends BasePostData {
+    author: User | {}, // is only {} when something fucks up horribly
+    replies: Post[],
+}
+
+interface UserStatus {
+    banned: boolean,
+    username: string,
+    bot: string
+}
+
 //FIXME - load from config
 const attachment_whitelist: string[] = []
 
@@ -66,17 +124,19 @@ console.info('uh ya')
 //TODO - user and post interfaces
 
 //SECTION - DB
-const acc = {
-    async getUser(username: string) {
-        const user = await usersColl.findOne({ "username": username });
+class Acc {
+    async getUser(username: string): Promise<string | UserData> {
+        const user: UserData | null = await usersColl.findOne<UserData>({ "username": username });
         if (!user)
             return "notExists";
         else return user;
-    },
+    }
 
     /** get just the public stuff */
-    async getUserPublic(username: string, includeProfile = true) {
-        const user = await usersColl.findOne({ "username": username });
+    async getUserPublic(username: string, includeProfile: true): Promise<FullUser | string>
+    async getUserPublic(username: string, includeProfile: false): Promise<User | string>
+    async getUserPublic(username: string, includeProfile = true): Promise<FullUser | User | string> {
+        const user: (User & Partial<UserData>) | null = await usersColl.findOne<UserData>({ "username": username });
         if (!user)
             return "notExists";
         else {
@@ -85,9 +145,9 @@ const acc = {
                 delete user.profile;
             return user;
         }
-    },
+    }
 
-    async addUser(data: any, username: string = '') {
+    async addUser(data: any, username: string = ''): Promise<true | string> {
         const user = await usersColl.findOne({ "username": username })
         if (user)
             return "exists";
@@ -97,9 +157,9 @@ const acc = {
             return 'fail'
         }
         return true
-    },
+    }
 
-    async editUser(data: any, username: string) {
+    async editUser(data: any, username: string): Promise<true | string> {
         const user = await usersColl.findOne({ "username": username })
         if (!user)
             return "notExists";
@@ -110,9 +170,9 @@ const acc = {
             return 'fail'
         }
         return true
-    },
+    }
 
-    async removeUser(username: string) {
+    async removeUser(username: string): Promise<true | string> {
         const user = await usersColl.findOne({ "username": username })
         if (!user)
             return "notExists"
@@ -132,9 +192,9 @@ const acc = {
             return "fail"
         }
         return true
-    },
+    }
 
-    async verify(token: string) {
+    async verify(token: string): Promise<string | UserStatus> {
         const user = await usersColl.findOne({ "secure.token": token })
         if (!user || user.deleted)
             return "notExists"
@@ -142,9 +202,9 @@ const acc = {
             return { "banned": true, "username": user["username"], "bot": user["bot"] }
         else
             return { "banned": false, "username": user["username"], "bot": user["bot"] }
-    },
+    }
 
-    async verifyPswd(username: string, password: string) {
+    async verifyPswd(username: string, password: string): Promise<string | {token: string, bot: boolean}> {
         const user = await usersColl.findOne({ "username": username })
         if (!user)
             return "notExists"
@@ -154,78 +214,101 @@ const acc = {
             return "banned"
         else
             return { "token": user.secure.token, "bot": user.bot }
-    },
+    }
 
-    async get_ban(username: string) {
+    async get_ban(username: string): Promise<string | {banned_until: number, ban_reason: string}> {
         const user = await usersColl.findOne({ "username": username })
         if (!user)
             return "notExists"
         return { "banned_until": user["banned_until"], "ban_reason": user["secure"]["ban_reason"] }
-    },
+    }
 
-    async get_perms(username: string) {
+    async get_perms(username: string): Promise<string | string[]> {
         const user = await usersColl.findOne({ "username": username })
         if (!user)
             return "notExists"
         return user["permissions"]
-    },
+    }
 }
+const acc = new Acc()
 const posts = {
-    async get_recent(amount=75) {
-        const posts = await postsColl.find().sort("created", -1).limit(amount).toArray()
-        for (const i of posts) {
-            let data: any = acc.getUser(i.author)
-            if (typeof(data) != 'object')
-                data = {}
-            else {
-                delete data.secure
-                delete data.profile
-            }
-            i.author = data
-            let incr = -1
-            for (const j of i.replies) {
-                incr += 1
-                data = acc.getUser(j.author)
-                if (typeof data != 'object')
+    async get_recent(amount=75): Promise<Post[]> {
+        const posts: PostData[] = await postsColl.find<PostData>({}).sort("created", -1).limit(amount).toArray()
+        const newPosts: Post[] = await Promise.all(posts
+            .map(async post => {
+                const user = await acc.getUser(post.author)
+                let data: User | {};
+                if (typeof(user) != 'object')
                     data = {}
                 else {
-                    delete data.secure
-                    delete data.profile
+                    const userData = user as User & Partial<UserData>;
+                    delete userData.secure
+                    delete userData.profile;
+                    data = userData;
                 }
-                i.replies[incr].author = data
-            }
-        }
-        return posts
+                const newPost: Post = {
+                    ...post,
+                    author: data,
+                }
+                let incr = -1
+                for (const j of post.replies) {
+                    incr += 1
+                    const user = await acc.getUser(j.author)
+                    let data: User | {};
+                    if (typeof(user) != 'object')
+                        data = {}
+                    else {
+                        const userData = user as User & Partial<UserData>;
+                        delete userData.secure
+                        delete userData.profile;
+                        data = userData;
+                    }
+                    newPost.replies[incr].author = data
+                }
+                return newPost as Post
+            }));
+        return newPosts;
     },
-    async get_page(offset=0) {
-        const posts = await postsColl.find().sort("created", -1).skip(offset).limit(75 + offset).toArray()
-        for (const i of posts) {
-            let data: any = await acc.getUser(i.author)
-            if (typeof(data) != 'object')
-                data = {}
-            else {
-                delete data.secure
-                delete data.profile
-            }
-            i.author = data
-            let incr = -1
-            for (const j of i.replies) {
-                incr += 1
-                data = acc.getUser(j.author)
-                if (typeof data != 'object')
+    async get_page(offset=0): Promise<Post[]> {
+        const posts = await postsColl.find<PostData>({}).sort("created", -1).skip(offset).limit(75 + offset).toArray()
+        const newPosts: Post[] = await Promise.all(posts
+            .map(async post => {
+                const user = await acc.getUser(post.author)
+                let data: User | {};
+                if (typeof(user) != 'object')
                     data = {}
                 else {
-                    delete data.secure
-                    delete data.profile
+                    const userData = user as User & Partial<UserData>;
+                    delete userData.secure
+                    delete userData.profile;
+                    data = userData;
                 }
-                i.replies[incr].author = data
-            }
-        }
-        return posts
+                const newPost: Post = {
+                    ...post,
+                    author: data,
+                }
+                let incr = -1
+                for (const j of post.replies) {
+                    incr += 1
+                    const user = await acc.getUser(j.author)
+                    let data: User | {};
+                    if (typeof(user) != 'object')
+                        data = {}
+                    else {
+                        const userData = user as User & Partial<UserData>;
+                        delete userData.secure
+                        delete userData.profile;
+                        data = userData;
+                    }
+                    newPost.replies[incr].author = data
+                }
+                return newPost as Post
+            }));
+        return newPosts;
     },
     async get_by_id(post_id: string, supply_author=false) {
-        //@ts-ignore:
-        const post = await postsColl.findOne({"_id": post_id})
+        //@ts-ignore: 
+        const post = await postsColl.findOne<PostData>({"_id": post_id})
         if (!post)
             return "notExists"
         if (supply_author) {
