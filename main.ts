@@ -242,6 +242,24 @@ class Acc {
             return "notExists"
         return user["permissions"]
     }
+
+    /*
+    def get_author(username):
+        user = usersd.find_one({"username": username, "$nor": [{"deleted": True}]})
+        if not user:
+            return "notExists"
+        else:
+            del user["secure"]
+            del user["profile"]
+            return user*/
+    async get_author(username: string): Promise<string | User> {
+        const user: null | (User & Partial<UserData>) = await usersColl.findOne<UserData>({username, "$nor": [{deleted: true}]});
+        if (!user)
+            return 'notExists';
+        delete user.secure;
+        delete user.profile;
+        return user as User;
+    }
 }
 const acc = new Acc()
 class Posts {
@@ -322,8 +340,8 @@ class Posts {
             }));
         return newPosts;
     }
+    async get_by_id(post_id: string, supply_author?:false): Promise<string | PostData>
     async get_by_id(post_id: string, supply_author:true): Promise<string | Post>
-    async get_by_id(post_id: string, supply_author:false): Promise<string | PostData>
     async get_by_id(post_id: string, supply_author=false): Promise<string | Post | PostData> {
         //@ts-ignore: 
         const post: PostData = await postsColl.findOne<PostData>({"_id": post_id})
@@ -428,6 +446,20 @@ const util = {
         if (typeof data != 'string')
             delete data.secure
         return data as User | string
+    },
+    /*
+    def author_data(username):
+        data = db.acc.get(username)
+        del data["secure"]
+        del data["profile"]
+        return data*/
+    async author_data(username: string): Promise<User | string> {
+        const data: (User & Partial<UserData>) | string = await acc.getUser(username);
+        if (typeof data != 'string') {
+            delete data.secure;
+            delete data.profile;
+        }
+        return data as User | string;
     }
 }
 
@@ -790,10 +822,8 @@ Deno.serve({
                     let incr = -1
                     for (const j of data["replies"]) {
                         incr += 1
-                        let reply_author = await acc.get_author(j["author"])
-                        if (typeof reply_author != 'object')
-                            reply_author = {}
-                        data["replies"][incr]["author"] = reply_author
+                        const reply_author = await acc.get_author(j["author"])
+                        data["replies"][incr]["author"] = typeof reply_author == 'object' ? reply_author : {}
                     }
                     broadcast(clients, JSON.stringify({
                         "command": "new_post",
