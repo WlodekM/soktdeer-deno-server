@@ -117,7 +117,7 @@ if (!Deno.env.has('MONGO_URL') ||
 
 const client = new mongo.MongoClient(mongoUrl);
 
-const db = client.db('deer')
+const db = client.db('deer-test')
 
 if (!await db.admin().command({ ping: 1 }))
     throw 'ping fail'
@@ -411,7 +411,6 @@ const util = {
                     && expects[i].types.includes('array')
                     && Array.isArray(gets[i]))
                     yes = true;
-                console.log(gets[i].length, expects[i].range)
                 if ((gets[i].length &&
                     (
                         gets[i].length > expects[i].range[1] ||
@@ -460,6 +459,16 @@ const util = {
             delete data.profile;
         }
         return data as User | string;
+    },
+    greeting() {
+        return JSON.stringify({
+            "command": "greet",
+            "version": '0.0.0', //version //FIXME - version
+            "ulist": ulist,
+            "messages": posts.get_recent(),
+            "locked": locked,
+            "server_contributors": [] //contributors //FIXME - contributors
+        })
     }
 }
 
@@ -544,14 +553,15 @@ Deno.serve({
 
         socket.onopen = () => {
             console.log("CONNECTED");
+            socket.send(util.greeting())
         };
         socket.onmessage = async (event) => {
             if (typeof event.data != 'string')
                 return;
             const message = String(event.data)
-            console.log(ratelimits[String(id)])
-            console.log(Date.now())
-            console.log(Date.now() > ratelimits[String(id)])
+            // console.log(ratelimits[String(id)])
+            // console.log(Date.now())
+            // console.log(Date.now() > ratelimits[String(id)])
             if (ratelimits[String(id)] > Date.now()) {
                 let lst = undefined
                 try {
@@ -618,7 +628,7 @@ Deno.serve({
                             "links": {}
                         },
                         "secure": {
-                            "password": scryptSync(r["password"], salt, 128),
+                            "password": scryptSync(r["password"], salt, 64),
                             "token": randomBytes(64).toString('base64url'),
                             "ban_reason": "",
                             "invite_code": r.invite_code ?? '',
@@ -660,7 +670,7 @@ Deno.serve({
                             String(id),
                             socket,
                             undefined,
-                            valid.bot)
+                            valid.bot);
                         socket.send(JSON.stringify({
                             error: false,
                             token: valid.token,
@@ -686,7 +696,7 @@ Deno.serve({
                     if (typeof valid != 'string') {
                         if (valid.banned)
                             return socket.send(util.error("banned", listener, acc.get_ban(valid["username"])))
-                        const userdata = util.authorize(valid["username"], String(id), socket, undefined, valid["bot"])
+                        const userdata = await util.authorize(valid["username"], String(id), socket, undefined, valid["bot"])
                         socket.send(JSON.stringify({ "error": false, "user": userdata, "listener": listener }))
                         return util.ulist()
                     }
@@ -724,8 +734,8 @@ Deno.serve({
                 'get_posts': async () => {
                     const fieldCheck = util.fieldCheck({offset: {types: ['number'], range: [-Infinity, Infinity]}}, r)
                     if (fieldCheck != true)
-                        return await socket.send(util.error(fieldCheck, listener))
-                    if (!client_data.includes(String(id)))
+                        return socket.send(util.error(fieldCheck, listener))
+                    if (!client_data[String(id)])
                         return socket.send(util.error("unauthorized", listener))
                     const data = await posts.get_page(r["offset"])
                     if (typeof data == 'string')
@@ -743,7 +753,7 @@ Deno.serve({
                     }, r)
                     if (fieldCheck != true)
                         return await socket.send(util.error(fieldCheck, listener))
-                    if (!client_data.includes(id))
+                    if (!client_data[id])
                         return await socket.send(util.error("unauthorized", listener))
                     //TODO - lc
                     // if "chat" in r and r["chat"] == "livechat":
