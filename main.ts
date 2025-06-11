@@ -53,7 +53,7 @@ interface FullUser extends User {
         bio: string,
         lastfm: string,
         banner: null | string,
-        links: {}
+        links: emptyObj
     },
 }
 
@@ -87,12 +87,14 @@ interface PostData extends BasePostData {
     replies: PostData[],
 }
 
+type emptyObj = Record<string | number | symbol, never>
+
 interface ReplyPost extends BasePostData {
-    author: User | {}, // is only {} when something fucks up horribly
+    author: User | emptyObj, // is only {} when something fucks up horribly
     replies: PostData[],
 }
 interface Post extends BasePostData {
-    author: User | {}, // is only {} when something fucks up horribly
+    author: User | emptyObj, // is only {} when something fucks up horribly
     replies: ReplyPost[],
 }
 
@@ -268,7 +270,7 @@ class Posts {
         const newPosts: Post[] = await Promise.all(posts
             .map(async post => {
                 const user = await acc.getUser(post.author)
-                let data: User | {};
+                let data: User | emptyObj;
                 if (typeof(user) != 'object')
                     data = {}
                 else {
@@ -281,9 +283,9 @@ class Posts {
                     ...post,
                     author: data,
                     replies: await Promise.all(post.replies
-                        .map<Promise<PostData>>(async (j, incr) => {
+                        .map<Promise<ReplyPost>>(async (j) => {
                             const user = await acc.getUser(j.author)
-                            let data: User | {};
+                            let data: User | emptyObj;
                             if (typeof(user) != 'object')
                                 data = {}
                             else {
@@ -295,7 +297,7 @@ class Posts {
                             return {
                                 ...j,
                                 author: data
-                            } as PostData
+                            } as ReplyPost
                         })
                     )
                 }
@@ -308,7 +310,7 @@ class Posts {
         const newPosts: Post[] = await Promise.all(posts
             .map(async post => {
                 const user = await acc.getUser(post.author)
-                let data: User | {};
+                let data: User | emptyObj;
                 if (typeof(user) != 'object')
                     data = {}
                 else {
@@ -320,21 +322,19 @@ class Posts {
                 const newPost: Post = {
                     ...post,
                     author: data,
-                }
-                let incr = -1
-                for (const j of post.replies) {
-                    incr += 1
-                    const user = await acc.getUser(j.author)
-                    let data: User | {};
-                    if (typeof(user) != 'object')
-                        data = {}
-                    else {
-                        const userData = user as User & Partial<UserData>;
-                        delete userData.secure
-                        delete userData.profile;
-                        data = userData;
-                    }
-                    newPost.replies[incr].author = data
+                    replies: await Promise.all(post.replies.map<Promise<ReplyPost>>(async (j) => {
+                        const user = await acc.getUser(j.author)
+                        let data: User | emptyObj;
+                        if (typeof(user) != 'object')
+                            data = {}
+                        else {
+                            const userData = user as User & Partial<UserData>;
+                            delete userData.secure
+                            delete userData.profile;
+                            data = userData;
+                        }
+                        return {...j, author: data} as ReplyPost
+                    }))
                 }
                 return newPost as Post
             }));
@@ -496,6 +496,7 @@ const clients: WebSocket[] = []
 const ips_by_client = {}
 
 // const invite_codes = []
+// deno-lint-ignore prefer-const
 let locked = false
 
 if (await acc.getUser("deleted") == "notExists") {
@@ -807,17 +808,16 @@ Deno.serve({
                         } catch (_) {}
                     }
                     if (r.content.length == 0 && r.attachments.length == 0)
-                        return await socket.send(util.error("lengthInvalid", listener));
-                    let username = client_data[String(id)].username
-                    let author = util.author_data(username)
-                    //TODO - types
-                    let replies: any[] = []
+                        return socket.send(util.error("lengthInvalid", listener));
+                    const username = client_data[String(id)].username
+                    const author = await util.author_data(username)
+                    const replies: PostData[] = []
                     for (const i of r["replies"]) {
-                        const post = posts.get_by_id(i)
+                        const post = await posts.get_by_id(i)
                         if (typeof post != 'string' && !replies.includes(i))
                             replies.push(post)
                     }
-                    let data = {
+                    const data = {
                         "_id": String(uuid.v4()),
                         "created": Date.now() / 1000,
                         "content": r.content,
@@ -828,18 +828,22 @@ Deno.serve({
                     const posted = await posts.add(data)
                     if (posted != true)
                         return socket.send(util.error(posted, listener))
-                    data.author = author
-                    let incr = -1
-                    for (const j of data["replies"]) {
-                        incr += 1
-                        const reply_author = await acc.get_author(j["author"])
-                        data["replies"][incr]["author"] = typeof reply_author == 'object' ? reply_author : {}
+                    const newData: Post = {
+                        ...data,
+                        author: typeof author == 'string' ? {} : author,
+                        replies: await Promise.all(data.replies.map<Promise<ReplyPost>>(async j => {
+                            const reply_author = await acc.get_author(j["author"])
+                            return {
+                                ...j,
+                                author: typeof reply_author == 'object' ? reply_author : {}
+                            }
+                        }))
                     }
                     broadcast(clients, JSON.stringify({
                         "command": "new_post",
-                        "data": data
+                        "data": newData
                     }))
-                    return await socket.send(JSON.stringify({"error": false, "listener": listener}))
+                    return socket.send(JSON.stringify({"error": false, "listener": listener}))
                 }
             }
             if (!commands[r.command])
