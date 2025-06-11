@@ -223,7 +223,7 @@ class Acc {
         const user = await usersColl.findOne({ "username": username })
         if (!user)
             return "notExists"
-        if (scryptSync(password, salt, 128) != user.secure.password)
+        if (scryptSync(password, salt, 64) != user.secure.password)
             return "unauthorized"
         else if (user["banned_until"] > Math.round(Date.now()))
             return "banned"
@@ -433,9 +433,9 @@ const util = {
     async authorize(username: string, conn_id: string, socket: WebSocket, client: string | undefined, bot: boolean): Promise<User | string> {
         // (todo from helium)
         // TODO: statuses
-        if (client)
-            if (!client.match || !client.match(/^[a-zA-Z0-9-_. ]{1,50}$/))
-                client = "";
+        if (!client || !client.match || !client.match(/^[a-zA-Z0-9-_. ]{1,50}$/))
+            client = "";
+        
         ulist[username] = { "client": client, "status": "", "bot": bot }
         client_data[conn_id] = { "username": username, "client": client, "websocket": socket, "connected": Date.now(), "bot": bot }
         //TODO: ips
@@ -460,12 +460,12 @@ const util = {
         }
         return data as User | string;
     },
-    greeting() {
+    async greeting() {
         return JSON.stringify({
             "command": "greet",
             "version": '0.0.0', //version //FIXME - version
             "ulist": ulist,
-            "messages": posts.get_recent(),
+            "messages": await posts.get_recent(),
             "locked": locked,
             "server_contributors": [] //contributors //FIXME - contributors
         })
@@ -498,6 +498,8 @@ const ips_by_client = {}
 // const invite_codes = []
 // deno-lint-ignore prefer-const
 let locked = false
+
+console.log(await util.greeting())
 
 if (await acc.getUser("deleted") == "notExists") {
     await acc.addUser({
@@ -552,9 +554,9 @@ Deno.serve({
 
         clients.push(socket)
 
-        socket.onopen = () => {
+        socket.onopen = async () => {
             console.log("CONNECTED");
-            socket.send(util.greeting())
+            socket.send(await util.greeting())
         };
         socket.onmessage = async (event) => {
             if (typeof event.data != 'string')
