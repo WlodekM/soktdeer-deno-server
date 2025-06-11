@@ -805,6 +805,7 @@ Deno.serve({
                         try {
                             if (attachment_whitelist.includes(new URL(i).hostname))
                                 attachments.push(i)
+                        // deno-lint-ignore no-empty
                         } catch (_) {}
                     }
                     if (r.content.length == 0 && r.attachments.length == 0)
