@@ -1,0 +1,17 @@
+{
+    "chats": {
+        "home": {
+            "history": true,
+            "motd": "the main channel"
+        },
+        "livechat": {
+            "history": false,
+            "motd": "the second channel, post whatever here since theres no history.. dont actually, rules still apply"
+        }
+    },
+    "motd": "no longer chaotic", // sadge
+    "whitelisted_urls": ["u.cubeupload.com", "files.catbox.moe", "litter.catbox.moe", "i.ibb.co", "cubeupload.com", "media.tenor.com", "tenor.com", "c.tenor.com", "meower.fraudulent.loan", "soktdeer.com", "boss.soktdeer.com", "static.darflen.com"],
+    "invite_required": false,
+    "contributors": ["cole", "berry :3", "barney86"],
+    "version": "Lithium-1.1.0a"
+}

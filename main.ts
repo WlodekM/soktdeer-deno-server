@@ -148,11 +148,15 @@ interface UserStatus {
 
 type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>
 
-//FIXME - load from config
-const attachment_whitelist: string[] = []
+const config = JSON.parse(
+    Deno.readTextFileSync('config.jsonc')
+        .replace(/\s*\/\/.*$/gm, '')
+        .replace(/,\s*(\]|\})/gm, '$1')
+)
+
+const attachment_whitelist: string[] = config.whitelisted_urls
 
 const mongoUrl = Deno.env.get('MONGO_URL')
-const salt = Deno.env.get('SALT') as string;
 
 if (!Deno.env.has('MONGO_URL') ||
     !mongoUrl ||
@@ -318,7 +322,7 @@ class Posts {
                 else {
                     const userData = user as User & Partial<UserData>;
                     delete userData.secure
-                    delete userData.profile;
+                    // delete userData.profile;
                     data = userData;
                 }
                 const newPost: Post = {
@@ -333,7 +337,7 @@ class Posts {
                             else {
                                 const userData = user as User & Partial<UserData>;
                                 delete userData.secure
-                                delete userData.profile;
+                                // delete userData.profile;
                                 data = userData;
                             }
                             return {
@@ -372,7 +376,7 @@ class Posts {
                         else {
                             const userData = user as User & Partial<UserData>;
                             delete userData.secure
-                            delete userData.profile;
+                            // delete userData.profile;
                             data = userData;
                         }
                         return {...j, author: data} as ReplyPost
@@ -514,18 +518,18 @@ const util = {
         const data: (User & Partial<UserData>) | string = await acc.getUser(username);
         if (typeof data != 'string') {
             delete data.secure;
-            delete data.profile;
+            // delete data.profile;
         }
         return data as User | string;
     },
     async greeting() {
         return JSON.stringify({
             "command": "greet",
-            "version": '0.0', //version //FIXME - version
+            "version": config.version,
             "ulist": ulist,
             "messages": await posts.get_recent(),
             "locked": locked,
-            "server_contributors": [] //contributors //FIXME - contributors
+            "server_contributors": config.contributors
         })
     }
 }
