@@ -28,8 +28,43 @@
 
 import mongo from "npm:mongodb";
 import dotenv from "npm:dotenv";
-import { scryptSync, randomBytes } from "node:crypto";
+import { scryptSync, randomBytes, timingSafeEqual } from "node:crypto";
+import { encodeBase64, decodeBase64 } from "https://deno.land/std@0.224.0/encoding/base64.ts";
 import * as uuid from "npm:uuid";
+
+const N = 16384;
+const r = 8;
+const p = 1;
+const keylen = 64;
+const maxmem = 128 * r * N + 64 * 1024 * 1024
+
+function hash(password: string): string {
+    const salt = randomBytes(16);
+    const key = scryptSync(password, salt, keylen, { N, r, p, maxmem });
+
+    const salt_b64 = encodeBase64(salt);
+    const key_b64 = encodeBase64(key);
+
+    return `$scrypt$ln=${N},r=${r},p=${p}$${salt_b64}$${key_b64}`;
+}
+function verify(password: string, hash: string): boolean {
+    const parts = hash.split("$");
+    if (parts.length !== 5 || parts[1] !== "scrypt") return false;
+
+    const paramStr = parts[2];
+    const params = Object.fromEntries(paramStr.split(",").map(p => p.split("=")));
+    const ln = parseInt(params.ln, 10);
+    const r = parseInt(params.r, 10);
+    const p = parseInt(params.p, 10);
+
+    const N = 2 ** ln;
+    const salt = decodeBase64(parts[3]);
+    const expected = decodeBase64(parts[4]);
+
+    const actual = scryptSync(password, salt, expected.length, { N, r, p, maxmem });
+
+    return timingSafeEqual(actual, expected);
+}
 
 dotenv.config()
 
@@ -96,6 +131,13 @@ interface ReplyPost extends BasePostData {
 interface Post extends BasePostData {
     author: User | emptyObj, // is only {} when something fucks up horribly
     replies: ReplyPost[],
+}
+interface InboxPost {
+  _id: string,
+  created: number,
+  content: string,
+  attachments: string[],
+  author?: string
 }
 
 interface UserStatus {
@@ -220,10 +262,10 @@ class Acc {
     }
 
     async verifyPswd(username: string, password: string): Promise<string | {token: string, bot: boolean}> {
-        const user = await usersColl.findOne({ "username": username })
+        const user = await usersColl.findOne<UserData>({ "username": username })
         if (!user)
             return "notExists"
-        if (scryptSync(password, salt, 64) != user.secure.password)
+        if (!verify(password, user.secure.password))
             return "unauthorized"
         else if (user["banned_until"] > Math.round(Date.now()))
             return "banned"
@@ -306,7 +348,7 @@ class Posts {
         return newPosts;
     }
     async get_page(offset=0): Promise<Post[]> {
-        const posts = await postsColl.find<PostData>({}).sort("created", -1).skip(offset).limit(75 + offset).toArray()
+        const posts: PostData[] = await postsColl.find<PostData>({}).sort("created", -1).skip(offset).limit(75 + offset).toArray()
         const newPosts: Post[] = await Promise.all(posts
             .map(async post => {
                 const user = await acc.getUser(post.author)
@@ -382,6 +424,22 @@ class Posts {
     }
 };
 const posts = new Posts();
+class Inbox {
+    async get_recent(amount=75): Promise<InboxPost[]> {
+        return await inboxColl.find<InboxPost>({}).sort("created", -1).limit(amount).toArray()
+    }
+    
+    //TODO - types for inbox posts
+    add(data: Omit<InboxPost, '_id'>) {
+        try {
+            inboxColl.insertOne(data)
+        } catch (e) {
+            return "fail"
+        }
+        return true
+    }
+}
+const inbox = new Inbox()
 //!SECTION
 
 const util = {
@@ -463,7 +521,7 @@ const util = {
     async greeting() {
         return JSON.stringify({
             "command": "greet",
-            "version": '0.0.0', //version //FIXME - version
+            "version": '0.0', //version //FIXME - version
             "ulist": ulist,
             "messages": await posts.get_recent(),
             "locked": locked,
@@ -498,8 +556,6 @@ const ips_by_client = {}
 // const invite_codes = []
 // deno-lint-ignore prefer-const
 let locked = false
-
-console.log(await util.greeting())
 
 if (await acc.getUser("deleted") == "notExists") {
     await acc.addUser({
@@ -631,7 +687,7 @@ Deno.serve({
                             "links": {}
                         },
                         "secure": {
-                            "password": scryptSync(r["password"], salt, 64),
+                            "password": hash(r.password),
                             "token": randomBytes(64).toString('base64url'),
                             "ban_reason": "",
                             "invite_code": r.invite_code ?? '',
@@ -746,8 +802,14 @@ Deno.serve({
                     return await socket.send(JSON.stringify({"error": false, "posts": data, "listener": listener}))
                 },
                 /*TODO: set_property, gen_invite, reset_invites, force_kick, ban, lock (finish)
-                 * banish_to_the_SHADOW_REALM, get_ips, get_inbox, post_inbox
+                 * banish_to_the_SHADOW_REALM, get_ips, , post_inbox
                  */
+                "get_inbox": async () => {
+                    if (!client_data[String(id)])
+                        return socket.send(util.error("unauthorized", listener))
+                    const data = await inbox.get_recent()
+                    socket.send(JSON.stringify({"error": false, "inbox": data, "listener": listener}))
+                },
                 'post': async () => {
                     const fieldCheck = util.fieldCheck({
                         content: {range: [1,3000], types: ['string']},
