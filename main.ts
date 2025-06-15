@@ -821,9 +821,9 @@ Deno.serve({
                         attachments: {range: [0,6], types: ['array']}
                     }, r)
                     if (fieldCheck != true)
-                        return await socket.send(util.error(fieldCheck, listener))
+                        return socket.send(util.error(fieldCheck, listener))
                     if (!client_data[id])
-                        return await socket.send(util.error("unauthorized", listener))
+                        return socket.send(util.error("unauthorized", listener))
                     //TODO - lc
                     // if "chat" in r and r["chat"] == "livechat":
                     //     attachments = []
