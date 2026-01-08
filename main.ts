@@ -121,6 +121,7 @@ interface BasePostData extends SentPostData {
 interface PostData extends BasePostData {
 	author: string,
 	replies: PostData[],
+	reactions: {},
 }
 
 type emptyObj = Record<string | number | symbol, never>
@@ -917,13 +918,14 @@ Deno.serve({
 						if (typeof post != 'string' && !replies.includes(i))
 							replies.push(post)
 					}
-					const data = {
-						"_id": String(uuid.v4()),
-						"created": Date.now() / 1000,
-						"content": r.content,
-						"replies": replies,
-						"attachments": attachments,
-						"author": username
+					const data: PostData = {
+						_id: String(uuid.v4()),
+						created: Date.now() / 1000,
+						content: r.content,
+						replies: replies,
+						attachments: attachments,
+						author: username,
+						reactions: {}
 					}
 					const posted = await posts.add(data)
 					if (posted != true)
