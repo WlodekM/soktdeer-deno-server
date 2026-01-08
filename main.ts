@@ -1,3 +1,4 @@
+
 // deno-lint-ignore-file no-explicit-any
 /**
  * some part of this code were taken from soktdeer helium
@@ -528,6 +529,36 @@ const util = {
             "version": config.version,
             "ulist": ulist,
             "messages": await posts.get_recent(),
+            "locked": locked,
+            "server_contributors": config.contributors
+        })
+    },
+    greetingMaintenance(message: string) {
+        return JSON.stringify({
+            "command": "greet",
+            "version": config.version,
+            "ulist": ulist,
+            "messages": [
+                {
+                    _id: '0',
+                    attachments: [],
+                    author: {
+                        _id: '0',
+                        avatar: null,
+                        banned_until: 0,
+                        bot: true,
+                        created: 0,
+                        display_name: 'Administrator',
+                        permissions: [],
+                        username: 'server',
+                        deleted: false,
+                        verified: true
+                    },
+                    content: message,
+                    created: 0,
+                    replies: []
+                }
+            ] as Post[],
             "locked": locked,
             "server_contributors": config.contributors
         })
